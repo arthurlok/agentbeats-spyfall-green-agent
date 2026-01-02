@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 from pydantic import BaseModel, HttpUrl, ValidationError
 from a2a.server.tasks import TaskUpdater
@@ -6,18 +7,24 @@ from a2a.utils import get_message_text, new_agent_text_message
 
 from messenger import Messenger
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("green_agent")
 
 class EvalRequest(BaseModel):
     """Request format sent by the AgentBeats platform to green agents."""
     participants: dict[str, HttpUrl] # role -> agent URL
     config: dict[str, Any]
 
+class SpyFallEval(BaseModel):
+    win_percentage: float
+    spy_win_percentage: float
+    non_spy_win_percentage: float
 
 class Agent:
     # Fill in: list of required participant roles, e.g. ["pro_debater", "con_debater"]
-    required_roles: list[str] = []
+    required_roles: list[str] = ["spy","non-spy"]
     # Fill in: list of required config keys, e.g. ["topic", "num_rounds"]
-    required_config_keys: list[str] = []
+    required_config_keys: list[str] = ["location","num_rounds","num_games"]
 
     def __init__(self):
         self.messenger = Messenger()
@@ -62,8 +69,19 @@ class Agent:
         # Use request.config for assessment parameters
 
         await updater.update_status(
-            TaskState.working, new_agent_text_message("Thinking...")
+            TaskState.working,
+            new_agent_text_message(f"Starting assessment.\n{request.model_dump_json()}")
         )
+   
+        ### CODE TO RUN GAME HERE - NEED TO RUN MULTIPLE TIMES BASED ON num_games
+
+        game_results = await self.messenger.run_spyfall(
+            participants=request.participants,
+            location=request.config["location"],
+            num_rounds=request.config["num_rounds"],
+            num_games=request.config["num_games"]
+        )
+
         await updater.add_artifact(
             parts=[
                 Part(root=TextPart(text="The agent performed well.")),
