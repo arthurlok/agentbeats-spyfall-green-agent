@@ -20,9 +20,14 @@ class SpyFallEval(BaseModel):
     spy_win_percentage: float
     non_spy_win_percentage: float
 
+# A2A participants message structure
+# {
+#     "participants": { "<name>": "<endpoint_url>" },
+#     "config": {}
+# }
+
 class Agent:
     # Fill in: list of required participant roles, e.g. ["pro_debater", "con_debater"]
-    required_roles: list[str] = ["spy","non-spy"]
     # Fill in: list of required config keys, e.g. ["topic", "num_rounds"]
     required_config_keys: list[str] = ["location","num_rounds","num_games"]
 
@@ -31,9 +36,9 @@ class Agent:
         # Initialize other state here
 
     def validate_request(self, request: EvalRequest) -> tuple[bool, str]:
-        missing_roles = set(self.required_roles) - set(request.participants.keys())
-        if missing_roles:
-            return False, f"Missing roles: {missing_roles}"
+        # missing_roles = set(self.required_roles) - set(request.participants.keys())
+        # if missing_roles:
+        #     return False, f"Missing roles: {missing_roles}"
 
         missing_config_keys = set(self.required_config_keys) - set(request.config.keys())
         if missing_config_keys:
@@ -75,11 +80,12 @@ class Agent:
    
         ### CODE TO RUN GAME HERE - NEED TO RUN MULTIPLE TIMES BASED ON num_games
 
-        game_results = await self.messenger.run_spyfall(
+        game_results = await self.run_spyfall(
             participants=request.participants,
             location=request.config["location"],
             num_rounds=request.config["num_rounds"],
-            num_games=request.config["num_games"]
+            num_games=request.config["num_games"],
+            updater=updater
         )
 
         await updater.add_artifact(
@@ -90,4 +96,30 @@ class Agent:
                 }))
             ],
             name="Result",
+        )
+
+    async def run_spyfall(self, participants: dict[str, HttpUrl], location: str, num_rounds: int, num_games: int, updater: TaskUpdater) -> SpyFallEval:
+        """Run multiple games of SpyFall and return aggregated results."""
+        total_spy_wins = 0
+        total_non_spy_wins = 0
+
+        for _ in range(num_games):
+            game_result = await self.messenger.play_spyfall_game(
+                participants=participants,
+                location=location,
+                num_rounds=num_rounds
+            )
+            if game_result["spy_won"]:
+                total_spy_wins += 1
+            else:
+                total_non_spy_wins += 1
+
+        win_percentage = (total_spy_wins + total_non_spy_wins) / num_games * 100
+        spy_win_percentage = total_spy_wins / num_games * 100
+        non_spy_win_percentage = total_non_spy_wins / num_games * 100
+
+        return SpyFallEval(
+            win_percentage=win_percentage,
+            spy_win_percentage=spy_win_percentage,
+            non_spy_win_percentage=non_spy_win_percentage
         )
