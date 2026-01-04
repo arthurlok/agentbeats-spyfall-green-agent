@@ -104,11 +104,8 @@ class Agent:
         total_non_spy_wins = 0
 
         for _ in range(num_games):
-            game_result = await self.messenger.play_spyfall_game(
-                participants=participants,
-                location=location,
-                num_rounds=num_rounds
-            )
+            game_env = SpyfallEnv(participants=participants, location=location, max_rounds=num_rounds)
+            game_result = await game_env.play_game()
             if game_result["spy_won"]:
                 total_spy_wins += 1
             else:

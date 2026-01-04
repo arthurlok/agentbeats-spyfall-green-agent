@@ -1,5 +1,6 @@
 import json
 from uuid import uuid4
+from typing import Optional
 
 import httpx
 from a2a.client import (
@@ -102,6 +103,7 @@ class Messenger:
         url: str,
         new_conversation: bool = False,
         timeout: int = DEFAULT_TIMEOUT,
+        metadata: Optional[dict] = None,
     ):
         """
         Communicate with another agent by sending a message and receiving their response.
@@ -120,11 +122,12 @@ class Messenger:
             base_url=url,
             context_id=None if new_conversation else self._context_ids.get(url, None),
             timeout=timeout,
+            metadata=metadata,
         )
         if outputs.get("status", "completed") != "completed":
             raise RuntimeError(f"{url} responded with: {outputs}")
         self._context_ids[url] = outputs.get("context_id", None)
         return outputs["response"]
-
+    
     def reset(self):
         self._context_ids = {}
