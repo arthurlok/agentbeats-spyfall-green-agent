@@ -6,6 +6,7 @@ from a2a.types import Message, TaskState, Part, TextPart, DataPart
 from a2a.utils import get_message_text, new_agent_text_message
 
 from messenger import Messenger
+from game_env import SpyfallEnv
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("green_agent")
@@ -15,11 +16,6 @@ class EvalRequest(BaseModel):
     participants: dict[str, HttpUrl] # role -> agent URL
     config: dict[str, Any]
 
-class SpyFallEval(BaseModel):
-    win_percentage: float
-    spy_win_percentage: float
-    non_spy_win_percentage: float
-
 # A2A participants message structure
 # {
 #     "participants": { "<name>": "<endpoint_url>" },
@@ -27,35 +23,26 @@ class SpyFallEval(BaseModel):
 # }
 
 class Agent:
-    # Fill in: list of required participant roles, e.g. ["pro_debater", "con_debater"]
-    # Fill in: list of required config keys, e.g. ["topic", "num_rounds"]
-    required_config_keys: list[str] = ["location","num_rounds","num_games"]
+    # Required configuration keys for a Spyfall game
+    required_config_keys: list[str] = ["location", "num_rounds"]
 
     def __init__(self):
         self.messenger = Messenger()
-        # Initialize other state here
 
     def validate_request(self, request: EvalRequest) -> tuple[bool, str]:
-        # missing_roles = set(self.required_roles) - set(request.participants.keys())
-        # if missing_roles:
-        #     return False, f"Missing roles: {missing_roles}"
-
+        """Validate that the request has all required configuration."""
         missing_config_keys = set(self.required_config_keys) - set(request.config.keys())
         if missing_config_keys:
             return False, f"Missing config keys: {missing_config_keys}"
 
-        # Add additional request validation here
-
         return True, "ok"
 
     async def run(self, message: Message, updater: TaskUpdater) -> None:
-        """Implement your agent logic here.
+        """Run a Spyfall game with the provided participants and configuration.
 
         Args:
-            message: The incoming message
+            message: The incoming message containing participants and config
             updater: Report progress (update_status) and results (add_artifact)
-
-        Use self.messenger.talk_to_agent(message, url) to call other agents.
         """
         input_text = get_message_text(message)
 
@@ -69,54 +56,84 @@ class Agent:
             await updater.reject(new_agent_text_message(f"Invalid request: {e}"))
             return
 
-        # Replace example code below with your agent logic
-        # Use request.participants to get participant agent URLs by role
-        # Use request.config for assessment parameters
-
+        # Update status with game start information
         await updater.update_status(
             TaskState.working,
-            new_agent_text_message(f"Starting assessment.\n{request.model_dump_json()}")
+            new_agent_text_message(f"Starting Spyfall game.\nParticipants: {list(request.participants.keys())}\nLocation: {request.config['location']}\nRounds: {request.config['num_rounds']}")
         )
-   
-        ### CODE TO RUN GAME HERE - NEED TO RUN MULTIPLE TIMES BASED ON num_games
 
-        game_results = await self.run_spyfall(
+        # Run the Spyfall game
+        game_result = await self.run_single_game(
             participants=request.participants,
             location=request.config["location"],
             num_rounds=request.config["num_rounds"],
-            num_games=request.config["num_games"],
             updater=updater
         )
 
+        # Format result message
+        result_text = self._format_game_result(game_result)
+
+        # Add artifact with game results
         await updater.add_artifact(
             parts=[
-                Part(root=TextPart(text="The agent performed well.")),
-                Part(root=DataPart(data={
-                    # structured assessment results
-                }))
+                Part(root=TextPart(text=result_text)),
+                Part(root=DataPart(data=game_result))
             ],
-            name="Result",
+            name="Game Result",
         )
 
-    async def run_spyfall(self, participants: dict[str, HttpUrl], location: str, num_rounds: int, num_games: int, updater: TaskUpdater) -> SpyFallEval:
-        """Run multiple games of SpyFall and return aggregated results."""
-        total_spy_wins = 0
-        total_non_spy_wins = 0
+    async def run_single_game(self, participants: dict[str, HttpUrl], location: str, num_rounds: int, updater: TaskUpdater) -> dict:
+        """Run a single game of Spyfall and return the results.
+        
+        Args:
+            participants: Dictionary mapping participant names to their agent URLs
+            location: The secret location for the game
+            num_rounds: Maximum number of rounds to play
+            updater: Task updater for reporting progress
+            
+        Returns:
+            Dictionary containing game results
+        """
+        # Create game environment
+        game_env = SpyfallEnv(participants=participants, location=location, max_rounds=num_rounds)
+        
+        # Assign roles
+        assigned_roles = game_env.assign_roles()
+        spy_name = [name for name, role in assigned_roles.items() if role == "spy"][0]
+        
+        logger.info(f"Game started - Spy: {spy_name}, Location: {location}, Max Rounds: {num_rounds}")
+        
+        # Run the game
+        game_result = await game_env.play_game(assigned_roles, location)
+        
+        logger.info(f"Game ended - Winner: {game_result['winner']}")
+        
+        return game_result
 
-        for _ in range(num_games):
-            game_env = SpyfallEnv(participants=participants, location=location, max_rounds=num_rounds)
-            game_result = await game_env.play_game()
-            if game_result["spy_won"]:
-                total_spy_wins += 1
-            else:
-                total_non_spy_wins += 1
+    def _format_game_result(self, game_result: dict) -> str:
+        """Format the game result into a readable string.
+        
+        Args:
+            game_result: The game result dictionary
+            
+        Returns:
+            Formatted result string
+        """
+        result_text = f"""
+Spyfall Game Results
+===================
 
-        win_percentage = (total_spy_wins + total_non_spy_wins) / num_games * 100
-        spy_win_percentage = total_spy_wins / num_games * 100
-        non_spy_win_percentage = total_non_spy_wins / num_games * 100
+Winner: {game_result['winner']}
+End Method: {game_result['end_method']}
 
-        return SpyFallEval(
-            win_percentage=win_percentage,
-            spy_win_percentage=spy_win_percentage,
-            non_spy_win_percentage=non_spy_win_percentage
-        )
+Spy: {game_result['spy']}
+Result: {game_result['result']}
+"""
+        if game_result['end_method'] == 'vote':
+            result_text += f"""
+Voting Results:
+- Players voted for: {game_result['voted_as_spy']}
+- Vote breakdown: {game_result['votes']}
+"""
+        
+        return result_text

@@ -39,6 +39,18 @@ all_locations = [
     "University",
 ]
 
+# Final results schema
+
+# {
+#     "winner": "spy" or "non-spies",
+#     "winner_role": "spy" or "non-spy",
+#     "participants": [...],
+#     "end_method": "vote" or "spy_guess",
+#     "spy": <spy_name>,
+#     "voted_as_spy": <name or None>,
+#     "votes": {...} or None,
+#     "result": <message>
+# }
 
 # Action models for structured JSON responses
 class AskQuestionAction(BaseModel):
@@ -120,17 +132,111 @@ class SpyfallEnv:
         self.spy_win = False 
     
     def assign_roles(self) -> dict[str, str]:
-        # Logic to assign roles to players
+        """Randomly assign one participant as spy, others as non-spies."""
         assigned_roles = {}
-        ## Randomly assign one participant as spy
         spy_participant = random.choice(list(self.participants.keys()))
         for name in self.participants:
-            if name == spy_participant:
-                assigned_roles[name] = "spy"
-            else:
-                assigned_roles[name] = "non-spy"
+            assigned_roles[name] = "spy" if name == spy_participant else "non-spy"
         self.assigned_roles = assigned_roles
         return assigned_roles
+
+    def _get_spy(self, assigned_roles: dict[str, str]) -> str:
+        """Get the name of the spy from assigned roles."""
+        return [name for name, role in assigned_roles.items() if role == "spy"][0]
+
+    def _get_non_spies(self, assigned_roles: dict[str, str]) -> list[str]:
+        """Get list of non-spy player names from assigned roles."""
+        return [name for name, role in assigned_roles.items() if role == "non-spy"]
+
+    def _get_other_players(self, assigned_roles: dict[str, str], exclude_name: str) -> list[str]:
+        """Get list of all players except the excluded one."""
+        return [name for name in self.participants if name != exclude_name]
+
+    def _build_spy_init_prompt(self, player_name: str, assigned_roles: dict[str, str]) -> str:
+        """Build the initialization prompt for the spy."""
+        other_players = self._get_other_players(assigned_roles, player_name)
+        return f"""You are playing a game of Spyfall. Your role is spy. The location is unknown to you but known to the remaining players (non-spies).
+                        Each round, all players will take turns asking and answering questions about the location. 
+                        You will not necessarily get to ask or answer a question every round, but the conversation will be broadcasted to you and all players.
+                        Non-spies will attempt to identify the spy while not revealing too much about the location to the spy.
+                        As the spy, you must try to identify the location through the conversation and also ask/answer questions without revealing your identity.
+
+                        These are the names of the other players: {', '.join(other_players)}.
+
+                        These are all possible locations for the game: {', '.join(all_locations)}.
+
+                        If you feel that you have enough information to guess the location, you may do so on your turn instead of asking a question.
+                        If you guess the location correctly, you win the game immediately. Otherwise, you lose immediately.
+
+                        You will play a total of {self.max_rounds} rounds. At the end of the game, all non-spies will blindly vote on who they believe the spy is. 
+                        If the non-spy majority correctly identifies the spy, they win; otherwise, the spy wins.
+                        """
+
+    def _build_non_spy_init_prompt(self, player_name: str, location: str, assigned_roles: dict[str, str]) -> str:
+        """Build the initialization prompt for a non-spy."""
+        other_players = self._get_other_players(assigned_roles, player_name)
+        return f"""You are playing a game of Spyfall. Your role is non-spy. The location is {location}.
+                        Each round, all non-spy players will take turns asking and answering questions about the location to attempt to identify the spy, who is the only player that does not know the location.
+                        As a non-spy, you must try to identify who the spy is through the conversation while answering questions without revealing the location. 
+                        You will not necessarily get to ask or answer a question every round, but the conversation will be broadcasted to you and all players.
+                        
+                        These are the names of the other players: {', '.join(other_players)}.
+
+                        These are all possible locations for the game: {', '.join(all_locations)}.
+                        
+                        Ask questions strategically to catch the spy, and answer questions honestly to help other non-spies identify the spy.
+
+                        If a spy chooses to guess the location on their turn and guesses correctly, they win the game immediately. Otherwise, they lose immediately.
+
+                        You will play a total of {self.max_rounds} rounds. At the end of the game, all non-spies will blindly vote on who they believe the spy is. 
+                        If the non-spy majority correctly identifies the spy, they win; otherwise, the spy wins.
+                        """
+
+    def _build_spy_action_prompt(self, assigned_roles: dict[str, str]) -> str:
+        """Build the action prompt for the spy."""
+        action_schema = get_action_schema(is_spy=True)
+        return f"""It is now your turn to take an action. You must choose ONE of the following actions:
+
+{action_schema}
+
+Examples of valid responses:
+
+Ask a question:
+{json.dumps({{"action": "ask_question", "target": "Alice", "question": "Is this location outdoors?"}}, indent=2)}
+
+Guess the location:
+{json.dumps({{"action": "guess_location", "location_guess": "Beach"}}, indent=2)}
+
+Respond ONLY with valid JSON matching one of the schemas above. Do not include any other text.
+                        """
+
+    def _build_non_spy_action_prompt(self) -> str:
+        """Build the action prompt for a non-spy."""
+        action_schema = get_action_schema(is_spy=False)
+        return f"""It is now your turn to ask a question to help identify the spy.
+
+{action_schema}
+
+Example of a valid response:
+{json.dumps({"action": "ask_question", "target": "Bob", "question": "Is this location a public place?"}, indent=2)}
+
+Respond ONLY with valid JSON matching the schema above. Do not include any other text.
+                        """
+
+    def _build_game_result(self, winner: str, spy_player: str, participants: list[str], 
+                           end_method: str, result_message: str, voted_as_spy: str = None, 
+                           votes: dict = None) -> dict:
+        """Build the standardized game result dictionary."""
+        return {
+            "winner": winner,
+            "winner_role": "spy" if winner == "spy" else "non-spy",
+            "participants": participants,
+            "end_method": end_method,
+            "spy": spy_player,
+            "voted_as_spy": voted_as_spy,
+            "votes": votes,
+            "result": result_message
+        }
 
     async def answer_turn(self, target: str, asker: str, question: str) -> str:
         """
@@ -185,13 +291,11 @@ class SpyfallEnv:
         Returns:
             Dictionary with vote counts for each player
         """
-        non_spy_players = [name for name, role in assigned_roles.items() if role == "non-spy"]
-        spy_player = [name for name, role in assigned_roles.items() if role == "spy"][0]
+        non_spy_players = self._get_non_spies(assigned_roles)
+        spy_player = self._get_spy(assigned_roles)
+        other_players = self._get_other_players(assigned_roles, spy_player)
         
         votes = {player: 0 for player in self.participants}
-        
-        # Get other player names for the voting prompt
-        other_players = [name for name in self.participants if name != spy_player]
         
         for voter_name in non_spy_players:
             prompt = f"""The game has ended. Now it is time to vote on who you think the spy is.
@@ -225,7 +329,7 @@ Respond with ONLY the name of the player you believe is the spy. Do not include 
         Returns:
             Dictionary with game results
         """
-        spy_player = [name for name, role in assigned_roles.items() if role == "spy"][0]
+        spy_player = self._get_spy(assigned_roles)
         
         # Collect votes from non-spies
         votes = await self._collect_votes(assigned_roles)
@@ -243,11 +347,13 @@ Respond with ONLY the name of the player you believe is the spy. Do not include 
         # Determine winner
         if voted_as_spy == spy_player:
             # Non-spies correctly identified the spy
+            winner = "non-spies"
             self.spy_win = False
             result_message = f"The non-spies correctly identified {spy_player} as the spy! Non-spies win!"
             logger.info(result_message)
         else:
             # Non-spies failed to identify the spy
+            winner = "spy"
             self.spy_win = True
             result_message = f"The non-spies voted for {voted_as_spy}, but {spy_player} was actually the spy! Spy wins!"
             logger.info(result_message)
@@ -255,123 +361,97 @@ Respond with ONLY the name of the player you believe is the spy. Do not include 
         # Broadcast the results
         await self._broadcast(result_message)
         
-        return {
-            "spy": spy_player,
-            "voted_as_spy": voted_as_spy,
-            "votes": votes,
-            "spy_win": self.spy_win,
-            "result": result_message
-        }
+        return self._build_game_result(
+            winner=winner,
+            spy_player=spy_player,
+            participants=list(self.participants.keys()),
+            end_method="vote",
+            result_message=result_message,
+            voted_as_spy=voted_as_spy,
+            votes=votes
+        )
 
     
     async def play_game(self, assigned_roles: dict[str, str], location: str) -> dict[str, str]:
         while self.round < self.max_rounds and not self.game_over:
             if self.round == 0:
-                # Initial round logic
-                for name in assigned_roles:
-                    if assigned_roles[name] == "spy":
-                        prompt = f"""You are playing a game of Spyfall. Your role is spy. The location is unknown to you but known to the remaining players (non-spies).
-                        Each round, all players will take turns asking and answering questions about the location. 
-                        You will not necessarily get to ask or answer a question every round, but the conversation will be broadcasted to you and all players.
-                        Non-spies will attempt to identify the spy while not revealing too much about the location to the spy.
-                        As the spy, you must try to identify the location through the conversation and also ask/answer questions without revealing your identity.
-
-                        These are the names of the other players: {', '.join([n for n in assigned_roles if n != name])}.
-
-                        These are all possible locations for the game: {', '.join(all_locations)}.
-
-                        If you feel that you have enough information to guess the location, you may do so on your turn instead of asking a question.
-                        If you guess the location correctly, you win the game immediately. Otherwise, you lose immediately.
-
-                        You will play a total of {self.max_rounds} rounds. At the end of the game, all non-spies will blindly vote on who they believe the spy is. 
-                        If the non-spy majority correctly identifies the spy, they win; otherwise, the spy wins.
-                        """
-                        response = await self.messenger.talk_to_agent(prompt, str(self.participants[name]), new_conversation=True)
-                    else:
-                        prompt = f"""You are playing a game of Spyfall. Your role is non-spy. The location is {location}.
-                        Each round, all non-spy players will take turns asking and answering questions about the location to attempt to identify the spy, who is the only player that does not know the location.
-                        As a non-spy, you must try to identify who the spy is through the conversation while answering questions without revealing the location. 
-                        You will not necessarily get to ask or answer a question every round, but the conversation will be broadcasted to you and all players.
-                        
-
-                        These are the names of the other players: {', '.join([n for n in assigned_roles if n != name])}.
-
-                        These are all possible locations for the game: {', '.join(all_locations)}.
-                        
-                        Ask questions strategically to catch the spy, and answer questions honestly to help other non-spies identify the spy.
-
-                        If a spy chooses to guess the location on their turn and guesses correctly, they win the game immediately. Otherwise, they lose immediately.
-
-                        You will play a total of {self.max_rounds} rounds. At the end of the game, all non-spies will blindly vote on who they believe the spy is. 
-                        If the non-spy majority correctly identifies the spy, they win; otherwise, the spy wins.
-                        """
-                        response = await self.messenger.talk_to_agent(prompt, str(self.participants[name]), new_conversation=True)
-
+                # Initial round - send role information to all players
+                await self._send_initial_prompts(assigned_roles, location)
                 self.round += 1
-            # Further rounds logic
             else:
-                for name in assigned_roles:
-                    # Check if game is over (e.g., spy made a guess)
-                    if self.game_over:
-                        break
-                    
-                    if assigned_roles[name] == "spy":
-                        action_schema = get_action_schema(is_spy=True)
-                        prompt = f"""It is now your turn to take an action. You must choose ONE of the following actions:
-
-{action_schema}
-
-Examples of valid responses:
-
-Ask a question:
-{json.dumps({{"action": "ask_question", "target": "Alice", "question": "Is this location outdoors?"}}, indent=2)}
-
-Guess the location:
-{json.dumps({{"action": "guess_location", "location_guess": "Beach"}}, indent=2)}
-
-Respond ONLY with valid JSON matching one of the schemas above. Do not include any other text.
-                        """
-                        response = await self.messenger.talk_to_agent(prompt, str(self.participants[name]), new_conversation=False)
-                        action = parse_action(response, is_spy=True)
-                        if action:
-                            logger.info(f"Spy {name} action: {action}")
-                            # Handle the action
-                            await self._handle_action(name, action, assigned_roles)
-                        else:
-                            logger.warning(f"Failed to parse spy action from {name}")
-                    else:
-                        action_schema = get_action_schema(is_spy=False)
-                        prompt = f"""It is now your turn to ask a question to help identify the spy.
-
-{action_schema}
-
-Example of a valid response:
-{json.dumps({"action": "ask_question", "target": "Bob", "question": "Is this location a public place?"}, indent=2)}
-
-Respond ONLY with valid JSON matching the schema above. Do not include any other text.
-                        """
-                        response = await self.messenger.talk_to_agent(prompt, str(self.participants[name]), new_conversation=False)
-                        action = parse_action(response, is_spy=False)
-                        if action:
-                            logger.info(f"Non-spy {name} action: {action}")
-                            # Handle the action
-                            await self._handle_action(name, action, assigned_roles)
-                        else:
-                            logger.warning(f"Failed to parse non-spy action from {name}")
-
+                # Subsequent rounds - players take turns with actions
+                await self._run_action_round(assigned_roles)
                 self.round += 1
 
-        # Game is over - conduct voting if it ended due to max rounds
+        # Determine game result
+        spy_player = self._get_spy(assigned_roles)
+        
         if not self.game_over:
+            # Game ended naturally (max rounds reached) - conduct voting
             game_results = await self._end_game(assigned_roles)
             return game_results
         else:
             # Game ended early due to spy guess
-            return {
-                "game_ended_early": True,
-                "spy_win": self.spy_win,
-                "reason": "Spy made a location guess"
-            }
+            result_message = f"The spy {spy_player} guessed the location: {'correct' if self.spy_win else 'incorrect'}!"
+            return self._build_game_result(
+                winner="spy" if self.spy_win else "non-spies",
+                spy_player=spy_player,
+                participants=list(self.participants.keys()),
+                end_method="spy_guess",
+                result_message=result_message
+            )
+
+    async def _send_initial_prompts(self, assigned_roles: dict[str, str], location: str) -> None:
+        """Send initial game information to all players."""
+        for name in assigned_roles:
+            if assigned_roles[name] == "spy":
+                prompt = self._build_spy_init_prompt(name, assigned_roles)
+            else:
+                prompt = self._build_non_spy_init_prompt(name, location, assigned_roles)
+            
+            await self.messenger.talk_to_agent(
+                prompt, str(self.participants[name]), new_conversation=True
+            )
+
+    async def _run_action_round(self, assigned_roles: dict[str, str]) -> None:
+        """Run a round where each player takes an action."""
+        for name in assigned_roles:
+            # Stop if game ends early (e.g., spy makes a guess)
+            if self.game_over:
+                break
+            
+            if assigned_roles[name] == "spy":
+                await self._process_spy_action(name, assigned_roles)
+            else:
+                await self._process_non_spy_action(name, assigned_roles)
+
+    async def _process_spy_action(self, spy_name: str, assigned_roles: dict[str, str]) -> None:
+        """Process the spy's turn - get their action and handle it."""
+        prompt = self._build_spy_action_prompt(assigned_roles)
+        response = await self.messenger.talk_to_agent(
+            prompt, str(self.participants[spy_name]), new_conversation=False
+        )
+        
+        action = parse_action(response, is_spy=True)
+        if action:
+            logger.info(f"Spy {spy_name} action: {action}")
+            await self._handle_action(spy_name, action, assigned_roles)
+        else:
+            logger.warning(f"Failed to parse spy action from {spy_name}")
+
+    async def _process_non_spy_action(self, non_spy_name: str, assigned_roles: dict[str, str]) -> None:
+        """Process a non-spy's turn - get their action and handle it."""
+        prompt = self._build_non_spy_action_prompt()
+        response = await self.messenger.talk_to_agent(
+            prompt, str(self.participants[non_spy_name]), new_conversation=False
+        )
+        
+        action = parse_action(response, is_spy=False)
+        if action:
+            logger.info(f"Non-spy {non_spy_name} action: {action}")
+            await self._handle_action(non_spy_name, action, assigned_roles)
+        else:
+            logger.warning(f"Failed to parse non-spy action from {non_spy_name}")
     
     async def _handle_action(self, actor: str, action: dict, assigned_roles: dict[str, str]) -> None:
         """
@@ -400,7 +480,9 @@ Respond ONLY with valid JSON matching the schema above. Do not include any other
 {target}: "{answer}"
             """
             await self._broadcast(broadcast_message)
-            
+
+        # Handle spy choosing to guess the location
+        
         elif action.get("action") == "guess_location":
             location_guess = action.get("location_guess")
             logger.info(f"{actor} guesses: {location_guess}")
