@@ -11,6 +11,6 @@ RUN \
     --mount=type=cache,target=/home/agent/.cache/uv,uid=1000 \
     uv sync --locked
 
-ENTRYPOINT ["uv", "run", "src/server.py"]
+ENTRYPOINT ["uv", "run", "src/main.py"]
 CMD ["--host", "0.0.0.0"]
 EXPOSE 9009
