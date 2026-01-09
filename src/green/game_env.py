@@ -2,7 +2,7 @@ import json
 import logging
 import random
 import asyncio
-from typing import Literal, Union
+from typing import Literal
 from pydantic import BaseModel, Field, HttpUrl, ValidationError
 
 from .messenger import Messenger
@@ -64,11 +64,6 @@ class GuessLocationAction(BaseModel):
     """Spy guessing the location."""
     action: Literal["guess_location"] = Field(description="The action type")
     location_guess: str = Field(description="The spy's guess for the location")
-
-
-class SpyAction(BaseModel):
-    """Action for a spy player."""
-    __root__: Union[AskQuestionAction, GuessLocationAction] = Field(discriminator="action")
 
 
 NonSpyAction = AskQuestionAction  # Non-spies can only ask questions
@@ -238,10 +233,10 @@ class SpyfallEnv:
 Examples of valid responses:
 
 Ask a question:
-{json.dumps({{"action": "ask_question", "target": "Alice", "question": "Is this location outdoors?"}}, indent=2)}
+{json.dumps({"action": "ask_question", "target": "Alice", "question": "Is this location outdoors?"}, indent=2)}
 
 Guess the location:
-{json.dumps({{"action": "guess_location", "location_guess": "Beach"}}, indent=2)}
+{json.dumps({"action": "guess_location", "location_guess": "Beach"}, indent=2)}
 
 Respond ONLY with valid JSON matching one of the schemas above. Do not include any other text.
                         """

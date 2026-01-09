@@ -22,7 +22,11 @@ DEFAULT_TIMEOUT = 300
 
 
 def create_message(
-    *, role: Role = Role.user, text: str, context_id: str | None = None
+    *,
+    role: Role = Role.user,
+    text: str,
+    context_id: str | None = None,
+    metadata: Optional[dict] = None,
 ) -> Message:
     return Message(
         kind="message",
@@ -30,6 +34,7 @@ def create_message(
         parts=[Part(TextPart(kind="text", text=text))],
         message_id=uuid4().hex,
         context_id=context_id,
+        metadata=metadata,
     )
 
 
@@ -50,6 +55,7 @@ async def send_message(
     streaming: bool = False,
     timeout: int = DEFAULT_TIMEOUT,
     consumer: Consumer | None = None,
+    metadata: Optional[dict] = None,
 ):
     """Returns dict with context_id, response and status (if exists)"""
     async with httpx.AsyncClient(timeout=timeout) as httpx_client:
@@ -64,7 +70,9 @@ async def send_message(
         if consumer:
             await client.add_event_consumer(consumer)
 
-        outbound_msg = create_message(text=message, context_id=context_id)
+        outbound_msg = create_message(
+            text=message, context_id=context_id, metadata=metadata
+        )
         last_event = None
         outputs = {"response": "", "context_id": None}
 
