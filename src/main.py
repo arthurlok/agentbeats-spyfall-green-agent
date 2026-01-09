@@ -1,9 +1,6 @@
 import argparse
 import os
 
-from . import green, white
-
-
 def main():
     parser = argparse.ArgumentParser(description="Run the A2A agent.")
     parser.add_argument(
@@ -21,9 +18,12 @@ def main():
     if role is None:
         raise ValueError("ROLE environment variable must be set to 'green' or 'white'.")
 
+# lazy importing so API keys are only needed for the chosen role
     if role == "green":
+        from . import green
         green.start(host=args.host, port=args.port, card_url=args.card_url)
     else:
+        from . import white
         white.start(host=args.host, port=args.port, card_url=args.card_url)
 
 
