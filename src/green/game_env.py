@@ -90,28 +90,56 @@ Guess Location:
 {schema}"""
 
 
+def extract_json_from_response(response: str) -> str:
+    """
+    Extract JSON from a response that may contain markdown code fences.
+
+    LLMs often return JSON wrapped in markdown like:
+    ```json
+    {"key": "value"}
+    ```
+
+    This function strips the code fences to get the raw JSON.
+    """
+    text = response.strip()
+
+    # Remove markdown code fences if present
+    if text.startswith("```"):
+        # Find the end of the first line (which may be ```json or just ```)
+        first_newline = text.find("\n")
+        if first_newline != -1:
+            text = text[first_newline + 1:]
+
+        # Remove closing fence
+        if text.endswith("```"):
+            text = text[:-3]
+
+    return text.strip()
+
+
 def parse_action(response: str, is_spy: bool) -> dict | None:
     """
     Parse and validate JSON action from agent response.
-    
+
     Agents must respond with valid JSON during action phases. This function extracts
     and validates the action according to the agent's role (spy vs non-spy).
-    
+
     Args:
         response: The raw response text from the agent
         is_spy: Whether the responding agent is a spy or non-spy
-        
+
     Returns:
         Validated action dictionary, or None if parsing/validation fails
-        
+
     Note:
         - Spy can perform: ask_question or guess_location
         - Non-spy can only perform: ask_question
         - Invalid actions are logged as warnings and return None
     """
     try:
-        # Try to extract JSON from response
-        action_dict = json.loads(response)
+        # Extract JSON from response (handles markdown code fences)
+        json_str = extract_json_from_response(response)
+        action_dict = json.loads(json_str)
         
         if is_spy:
             # Try to parse as either ask or guess action
@@ -187,10 +215,10 @@ class SpyfallEnv:
         """Build the initialization prompt for the spy."""
         other_players = self._get_other_players(assigned_roles, player_name)
         return f"""You are playing a game of Spyfall. Your role is spy. The location is unknown to you but known to the remaining players (non-spies).
-                        Each round, all players will take turns asking and answering questions about the location. 
-                        You will not necessarily get to ask or answer a question every round, but the conversation will be broadcasted to you and all players.
+                        Each round, all players will take a turn each asking and answering questions about the location. 
+                        You will not necessarily get to ask or answer a question every turn, but the conversation will be broadcasted to you and all players.
                         Non-spies will attempt to identify the spy while not revealing too much about the location to the spy.
-                        As the spy, you must try to identify the location through the conversation and also ask/answer questions without revealing your identity.
+                        As the spy, you must try to identify the location through the conversation and also ask/answer questions without raising suspicion.
 
                         These are the names of the other players: {', '.join(other_players)}.
 
@@ -207,9 +235,10 @@ class SpyfallEnv:
         """Build the initialization prompt for a non-spy."""
         other_players = self._get_other_players(assigned_roles, player_name)
         return f"""You are playing a game of Spyfall. Your role is non-spy. The location is {location}.
-                        Each round, all non-spy players will take turns asking and answering questions about the location to attempt to identify the spy, who is the only player that does not know the location.
-                        As a non-spy, you must try to identify who the spy is through the conversation while answering questions without revealing the location. 
-                        You will not necessarily get to ask or answer a question every round, but the conversation will be broadcasted to you and all players.
+                        Each round, all players will take a turn each asking and answering questions about the location.
+                        The spy does not know the location and will try to blend in while identifying the location through the conversation. 
+                        As a non-spy, you must try to identify who the spy is through questioning and observation without obviously revealing the location. 
+                        You will not necessarily get to ask or answer a question every turn, but the conversation will be broadcasted to you and all players.
                         
                         These are the names of the other players: {', '.join(other_players)}.
 
@@ -282,8 +311,10 @@ Respond ONLY with valid JSON matching the schema above. Do not include any other
             The target player's response
         """
         prompt = f"""A player named {asker} asks you: "{question}"
-        Please provide your answer. 
-        """
+
+You must answer this question in natural language (NOT JSON). 
+
+Give a conversational response that gives you the best chance to win the game based on your role."""
         response = await self.messenger.talk_to_agent(
             prompt, str(self.participants[target]), new_conversation=False
         )

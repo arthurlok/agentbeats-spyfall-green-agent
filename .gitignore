@@ -15,3 +15,6 @@ wheels/
 
 # LLM code review comments
 CODE_REVIEW.md
+
+# log outputs
+outputs/
