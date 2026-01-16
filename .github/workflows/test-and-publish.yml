@@ -23,14 +23,14 @@ jobs:
             build_args: |
               ROLE=white
               AGENT_MODEL=google/gemini-2.0-flash-001
-          - image: agentbeats-spyfall/green-claude-sonnet-4
+          - image: agentbeats-spyfall/white-claude-sonnet-4
             build_args: |
-              ROLE=green
+              ROLE=white
               AGENT_MODEL=anthropic/claude-sonnet-4
-          - image: agentbeats-spyfall/green-gpt-4o
+          - image: agentbeats-spyfall/white-gpt-4o-mini
             build_args: |
-              ROLE=green
-              AGENT_MODEL=openai/gpt-4o
+              ROLE=white
+              AGENT_MODEL=openai/gpt-4o-mini
 
     permissions:
       contents: read
