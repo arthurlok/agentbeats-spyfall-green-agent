@@ -1,4 +1,5 @@
 import logging
+import random
 from typing import Any
 from pydantic import BaseModel, HttpUrl, ValidationError
 from a2a.server.tasks import TaskUpdater
@@ -6,7 +7,7 @@ from a2a.types import Message, TaskState, Part, TextPart, DataPart
 from a2a.utils import get_message_text, new_agent_text_message
 
 from .messenger import Messenger
-from .game_env import SpyfallEnv
+from .game_env import SpyfallEnv, all_locations
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("green_agent")
@@ -39,16 +40,22 @@ class Agent:
     def validate_request(self, request: EvalRequest) -> tuple[bool, str]:
         """
         Validate that the request has all required configuration.
-        
+
         Args:
             request: The evaluation request to validate
-            
+
         Returns:
             Tuple of (is_valid: bool, message: str)
         """
         missing_config_keys = set(self.required_config_keys) - set(request.config.keys())
         if missing_config_keys:
             return False, f"Missing config keys: {missing_config_keys}"
+
+        num_players = len(request.participants)
+        if num_players < 3:
+            return False, f"Minimum 3 players required, got {num_players}"
+        if num_players > 8:
+            return False, f"Maximum 8 players allowed, got {num_players}"
 
         return True, "ok"
 
@@ -72,16 +79,21 @@ class Agent:
             await updater.reject(new_agent_text_message(f"Invalid request: {e}"))
             return
 
+        # Resolve location - if "random", pick from all_locations
+        location = request.config["location"]
+        if location.lower() == "random":
+            location = random.choice(all_locations)
+
         # Update status with game start information
         await updater.update_status(
             TaskState.working,
-            new_agent_text_message(f"Starting Spyfall game.\nParticipants: {list(request.participants.keys())}\nLocation: {request.config['location']}\nRounds: {request.config['num_rounds']}")
+            new_agent_text_message(f"Starting Spyfall game.\nParticipants: {list(request.participants.keys())}\nLocation: {location}\nRounds: {request.config['num_rounds']}")
         )
 
         # Run the Spyfall game
         game_result = await self.run_single_game(
             participants=request.participants,
-            location=request.config["location"],
+            location=location,
             num_rounds=request.config["num_rounds"],
             updater=updater
         )
